@@ -1,0 +1,205 @@
+#!/bin/sh /etc/rc.common
+
+USE_PROCD=1
+START=50
+
+PROG=/usr/sbin/vsftpd
+
+VAR=/var/etc/vsftpd
+CONF=$VAR/vsftpd.conf
+#VUSER_DB=$VAR/vusers
+VUSER_CONF_DIR=$VAR/users
+CHROOT_DIR=$VAR/empty
+
+general_options="$(echo \
+	'listen_port:uinteger:21' \
+	'write_enable:bool:0' \
+	'download_enable:bool:1' \
+	'dirlist_enable:bool:1' \
+	'ls_recurse_enable:bool:0' \
+	'force_dot_files:bool:0' \
+	'ftpd_banner:string' \
+	'dirmessage_enable:bool:0' \
+	'message_file:string:.message' \
+	'local_enable:bool:0' \
+	'local_root:string' \
+	'local_umask:string:022' \
+	'local_max_rate:uinteger:0' \
+	'port_enable:bool:1' \
+	'ftp_data_port:uinteger:20' \
+	'connect_timeout:uinteger:60' \
+	'pasv_enable:bool:1' \
+	'pasv_min_port:port:0' \
+	'pasv_max_port:port:0' \
+	'pasv_addr_resolve:bool:0' \
+	'pasv_address:ipaddr' \
+	'accept_timeout:uinteger:60' \
+	'ascii_download_enable:bool:0' \
+	'ascii_upload_enable:bool:0' \
+	'idle_session_timeout:uinteger:300' \
+	'data_connection_timeout:uinteger:300' \
+	'max_clients:uinteger:0' \
+	'max_per_ip:uinteger:0' \
+	'max_login_fails:uinteger:3' \
+	'guest_enable:bool:0' \
+	'guest_username:string:ftp' \
+	'anonymous_enable:bool:1' \
+	'ftp_username:string:ftp' \
+	'anon_root:string:/home/ftp' \
+	'anon_umask:string:022' \
+	'anon_max_rate:string:0' \
+	'anon_mkdir_write_enable:bool:0' \
+	'anon_upload_enable:bool:0' \
+	'anon_other_write_enable:bool:0' \
+	'syslog_enable:bool:0' \
+	'xferlog_enable:bool:1' \
+	'vsftpd_log_file:string:/var/log/vsftpd.log')"
+
+_cleanup() {
+	rm -f $CONF
+	rm -rf $VUSER_CONF_DIR $CHROOT_DIR
+
+	mkdir -m 0755 -p $VAR
+	mkdir -p $VUSER_CONF_DIR
+	mkdir -p $CHROOT_DIR
+}
+
+vusers_iterate()
+{
+	local username home anon_umask anon_max_rate write_enable anon_upload_enable anon_other_write_enable
+	local vuser_options="$(echo \
+		'username:string' \
+		'home:string:/home/ftp' \
+		'anon_umask:string:022' \
+		'anon_max_rate:string:0' \
+		'write_enable:bool:0' \
+		'anon_upload_enable:bool:0' \
+		'anon_other_write_enable:bool:0')"
+
+	uci_validate_section vsftpd user $1 $vuser_options
+
+	for ol in $vuser_options; do
+		local o="${ol%%:*}"
+		local t="$(echo $ol | cut -d: -f2)"
+		local v="$(eval echo \$$o)"
+
+		if [ "$t" = "bool" ]; then
+			[ "$v" = "1" ] && eval "$o=YES" || eval "$o=NO"
+		fi
+	done
+
+	rm -f $VUSER_CONF_DIR/$username
+	touch $VUSER_CONF_DIR/$username
+
+	[ -n $home ] || home=$CHROOT_DIR
+
+	cat > "$VUSER_CONF_DIR/$username" <<-EOF
+		anon_world_readable_only=NO
+		anon_mkdir_write_enable=$write_enable
+		anon_upload_enable=$anon_upload_enable
+		anon_other_write_enable=$anon_other_write_enable
+		anon_umask=$anon_umask
+		anon_max_rate=$anon_max_rate
+		local_root=$home
+		write_enable=$write_enable
+	EOF
+
+	if ! [ -d "$home" ]; then
+		mkdir -p $home
+		chown $guest_username:$guest_username $home
+		chmod -R a+w $home
+	fi
+}
+
+general_settings() {
+	for ol in $general_options; do
+		local o="${ol%%:*}"
+		local t="$(echo $ol | cut -d: -f2)"
+		local v="$(eval echo \$$o)"
+
+		if [ "$t" = "bool" ] && [ -n "$v" ]; then
+			[ "$v" = "1" ] && v="YES" || v="NO"
+		fi
+
+		[ -z "$v" ] || echo "$o=$v" >> "$CONF"
+	done
+
+	mkdir -m 0755 -p /home/$ftp_username
+	chown $ftp_username:$ftp_username /home/$ftp_username
+
+	if [ "$anonymous_enable" = "1" ]; then
+		echo "no_anon_password=YES" >> "$CONF"
+
+		mkdir -p $anon_root
+		chown -R $ftp_username:$ftp_username $anon_root
+	fi
+
+	if [ "$guest_enable" = "1" ]; then
+		echo "uci_config_name=vsftpd" >> "$CONF"
+		echo "user_config_dir=$VUSER_CONF_DIR" >> "$CONF"
+		config_load vsftpd
+		config_foreach vusers_iterate user
+	fi
+
+	[ -z "$local_root" ] || echo "local_root=$local_root" >> "CONF"
+
+	if [ "$local_enable" = "0" ] && [ "$guest_enable" = "1" ]; then
+		sed -i "s/\(local_enable\)=NO/\1=YES/g" "CONF"
+	fi
+}
+
+extra_settings() {
+	for o in $_; do
+		[ -z "$(echo $o | grep -oE '\w+=.*')" ] || echo "$o" >> "$CONF"
+	done
+}
+
+create_instance() {
+	local instance=$1
+	shift
+	local param=$@
+
+	procd_open_instance "$instance"
+	procd_set_param command "$PROG"
+	procd_append_param command $param
+
+	procd_set_param respawn
+	procd_set_param file "$CONF"
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger vsftpd
+}
+
+start_service() {
+	local listen listen_ipv6 listen_address listen_address6
+
+	uci_validate_section vsftpd vsftpd general \
+		'listen:bool:1' \
+		'listen_address:ip4addr:0.0.0.0' \
+		'listen_ipv6:bool:0' \
+		'listen_address6:ip6addr:::'
+
+	[ "$listen" = "1" ] || [ "$listen_ipv6" = "1" ] || return 0;
+
+	_cleanup
+
+	> "$CONF"
+
+	cat > "$CONF" <<-EOF
+		background=NO
+		allow_writeable_chroot=YES
+		anon_world_readable_only=NO
+		secure_chroot_dir=$CHROOT_DIR
+		use_localtime=YES
+	EOF
+
+	uci_load_validate vsftpd vsftpd general general_settings $general_options
+	uci_load_validate vsftpd vsftpd extra extra_settings '_:string'
+
+	[ "$listen" = "1" ] && create_instance ipv4 -olisten_address=${listen_address:-0.0.0.0} -olisten=YES -olisten_ipv6=NO $CONF
+	[ "$listen_ipv6" = "1" ] && create_instance ipv6 -olisten_address6=${listen_address6:-::} -olisten=NO -olisten_ipv6=YES $CONF
+
+	return 0
+}
