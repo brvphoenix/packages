@@ -8,13 +8,13 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=libmbim
-PKG_VERSION:=1.30.0
-PKG_RELEASE:=2
+PKG_VERSION:=1.31.6
+PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://gitlab.freedesktop.org/mobile-broadband/libmbim.git
-PKG_SOURCE_VERSION:=$(PKG_VERSION)
-PKG_MIRROR_HASH:=0ff9212138eb68c2e33ad9220aa64df2e9a0da86f03dd02bf6d4cf02bcd95a68
+PKG_SOURCE_VERSION:=$(PKG_VERSION)-dev
+PKG_MIRROR_HASH:=8b0f32b2a1f5ac76a9c9e5cb738842abfb6cf61af7cab0ebaa1f1cc05aa43746
 
 PKG_BUILD_FLAGS:=gc-sections
 
